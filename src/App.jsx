@@ -12,7 +12,7 @@ function App() {
   const [currentPlayer, setCurrentPlayer] = useState('blue');
   const [winner, setWinner] = useState(null);
   const [hoveredPlayer, setHoveredPlayer] = useState(false);
-  
+
   // Online mode 
   const [menuMode, setMenuMode] = useState('main'); // 'main', 'online'
   const [isOnlineMode, setIsOnlineMode] = useState(false);
@@ -23,7 +23,7 @@ function App() {
   const [playerNames, setPlayerNames] = useState({ blue: 'Blue', black: 'Black' });
   const [waitingForPlayer, setWaitingForPlayer] = useState(false);
   const [, setConnectionStatus] = useState('disconnected');
-  
+
   const wsRef = useRef(null);
 
   // WebSocket 
@@ -32,32 +32,32 @@ function App() {
       // Railway deployment URL
       const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:3001';
       const ws = new WebSocket(wsUrl);
-      
+
       ws.onopen = () => {
         console.log('Connected to server');
         setConnectionStatus('connected');
       };
-      
+
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         // eslint-disable-next-line react-hooks/immutability
         handleWebSocketMessage(data);
       };
-      
+
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         setConnectionStatus('error');
       };
-      
+
       ws.onclose = () => {
         console.log('Disconnected from server');
         setConnectionStatus('disconnected');
         wsRef.current = null;
       };
-      
+
       wsRef.current = ws;
     }
-    
+
     return () => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.close();
@@ -73,41 +73,49 @@ function App() {
         setPlayerNames(prev => ({ ...prev, blue: playerName }));
         setWaitingForPlayer(true);
         break;
-        
+
       case 'room_joined':
         setRoomCode(data.roomCode);
         setMyPlayerColor('black');
         setPlayerNames({ blue: data.blueName, black: playerName });
         startOnlineGame();
         break;
-        
+
       case 'player_joined':
         setPlayerNames(prev => ({ ...prev, black: data.playerName }));
         setWaitingForPlayer(false);
         startOnlineGame();
         break;
-        
+
       case 'game_start':
-        // Game is starting
         break;
-        
+
       case 'move':
         handleOpponentMove(data.row, data.col, data.player);
         break;
-        
+
       case 'game_over':
         setWinner(data.winner);
         break;
-        
+
       case 'error':
         alert(data.message);
         break;
-        
+
       case 'room_expired':
         alert('Room expired due to inactivity');
         backToMenu();
         break;
-        
+
+      case 'player_disconnected':
+        setWinner(null);
+        setTimeout(() => {
+          alert('Opponent disconnected');
+          backToMenu();
+        }, 100);
+        break;
+
+
       default:
         break;
     }
@@ -125,47 +133,54 @@ function App() {
     setWaitingForPlayer(false);
   };
 
-  const handleOpponentMove = (row, col, player) => {
-    const newBoard = board.map(r => [...r]);
-    const oldPos = player === 'blue' ? bluePos : blackPos;
-    
-    newBoard[oldPos.row][oldPos.col] = player;
-    setBoard(newBoard);
-    
-    const newPos = { row, col };
-    const nextPlayer = player === 'blue' ? 'black' : 'blue';
-    
-    const updatedBluePos = player === 'blue' ? newPos : bluePos;
-    const updatedBlackPos = player === 'black' ? newPos : blackPos;
-    
-    if (player === 'blue') {
-      setBluePos(newPos);
-    } else {
-      setBlackPos(newPos);
-    }
-    
-    setTimeout(() => {
-      const opponentPos = nextPlayer === 'blue' ? updatedBluePos : updatedBlackPos;
-      const currentPlayerNewPos = player === 'blue' ? updatedBluePos : updatedBlackPos;
-      
-      if (checkGameOver(opponentPos, currentPlayerNewPos, newBoard, BOARD_SIZE)) {
-        setWinner(player);
+  const applyMove = (player, newRow, newCol) => {
+    setBoard(prevBoard => {
+      const newBoard = prevBoard.map(r => [...r]);
+
+      const oldPos = player === 'blue' ? bluePos : blackPos;
+
+      newBoard[oldPos.row][oldPos.col] = player;
+
+      if (player === 'blue') {
+        setBluePos({ row: newRow, col: newCol });
       } else {
-        setCurrentPlayer(nextPlayer);
-        
-        if (checkGameOver(currentPlayerNewPos, opponentPos, newBoard, BOARD_SIZE)) {
-          setWinner(nextPlayer);
-        }
+        setBlackPos({ row: newRow, col: newCol });
       }
-    }, 100);
+
+      return newBoard;
+    });
+
+    setCurrentPlayer(prev => (prev === 'blue' ? 'black' : 'blue'));
   };
+
+
+  const getCurrentPlayerName = () => {
+    if (isOnlineMode && currentPlayer === myPlayerColor) {
+      return playerName;
+    }
+    return playerNames[currentPlayer] || currentPlayer;
+  };
+
+
+  const handleOpponentMove = (row, col, player) => {
+    applyMove(player, row, col);
+
+    const opponentPos = player === 'blue' ? blackPos : bluePos; 
+    const currentPos = player === 'blue' ? { row, col } : { row, col };
+
+    if (checkGameOver(opponentPos, currentPos, board, BOARD_SIZE)) {
+      setWinner(player);
+    }
+  };
+
+
 
   const createRoom = () => {
     if (!playerName.trim()) {
       alert('Please enter your name');
       return;
     }
-    
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'create_room',
@@ -179,12 +194,12 @@ function App() {
       alert('Please enter your name');
       return;
     }
-    
+
     if (!joinRoomInput.trim()) {
       alert('Please enter a room code');
       return;
     }
-    
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'join_room',
@@ -215,78 +230,49 @@ function App() {
     setRoomCode('');
     setPlayerName('');
     setJoinRoomInput('');
-    
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    setMyPlayerColor(null);
+    setWinner(null);
+
+    if (wsRef.current) {
       wsRef.current.close();
+      wsRef.current = null;
     }
   };
 
+
   const handleSquareClick = (row, col) => {
-    if (winner || !isValidMove(row, col, board, currentPlayer, bluePos, blackPos, BOARD_SIZE)) return;
-    
+    if (winner) return;
+    if (!isValidMove(row, col, board, currentPlayer, bluePos, blackPos, BOARD_SIZE)) return;
     if (isOnlineMode && currentPlayer !== myPlayerColor) return;
+    if (isOnlineMode && !wsRef.current) return;
 
-    const newBoard = board.map(r => [...r]);
-    const oldPos = currentPlayer === 'blue' ? bluePos : blackPos;
+    applyMove(currentPlayer, row, col);
 
-    newBoard[oldPos.row][oldPos.col] = currentPlayer;
-
-    const newPos = { row, col };
-    const nextPlayer = currentPlayer === 'blue' ? 'black' : 'blue';
-
-    const updatedBluePos = currentPlayer === 'blue' ? newPos : bluePos;
-    const updatedBlackPos = currentPlayer === 'black' ? newPos : blackPos;
-
-    setBoard(newBoard);
-    
-    if (currentPlayer === 'blue') {
-      setBluePos(newPos);
-    } else {
-      setBlackPos(newPos);
-    }
-    
-    // Send move to server if online
-    if (isOnlineMode && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    if (isOnlineMode && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'move',
-        roomCode: roomCode,
+        roomCode,
         row,
         col,
         player: currentPlayer
       }));
     }
 
-    setTimeout(() => {
-      const opponentPos = nextPlayer === 'blue' ? updatedBluePos : updatedBlackPos;
-      const currentPlayerNewPos = currentPlayer === 'blue' ? updatedBluePos : updatedBlackPos;
+    const currentPos = currentPlayer === 'blue' ? { row, col } : (currentPlayer === 'black' ? { row, col } : null);
+    const opponentPos = currentPlayer === 'blue' ? blackPos : bluePos;
 
-      if (checkGameOver(opponentPos, currentPlayerNewPos, newBoard, BOARD_SIZE)) {
-        setWinner(currentPlayer);
-        
-        if (isOnlineMode && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'game_over',
-            roomCode: roomCode,
-            winner: currentPlayer
-          }));
-        }
-      } else {
-        setCurrentPlayer(nextPlayer);
-        
-        if (checkGameOver(currentPlayerNewPos, opponentPos, newBoard, BOARD_SIZE)) {
-          setWinner(nextPlayer);
-          
-          if (isOnlineMode && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({
-              type: 'game_over',
-              roomCode: roomCode,
-              winner: nextPlayer
-            }));
-          }
-        }
+    if (checkGameOver(opponentPos, currentPos, board, BOARD_SIZE)) {
+      setWinner(currentPlayer);
+      if (isOnlineMode && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'game_over',
+          roomCode,
+          winner: currentPlayer
+        }));
       }
-    }, 100);
+    }
   };
+
 
   const renderSquare = (row, col) => {
     const isBlue = bluePos.row === row && bluePos.col === col;
@@ -345,7 +331,7 @@ function App() {
         </div>
       )}
 
-      {!gameStarted && menuMode === 'online' && (
+      {!gameStarted && menuMode === 'online' && !waitingForPlayer && (
         <div className="online-menu">
           <div className="online-section">
             <h2>Join a Room</h2>
@@ -411,7 +397,7 @@ function App() {
               </div>
             ) : (
               <div style={{ color: currentPlayer === 'blue' ? '#316dee' : '#e3e3e6' }}>
-                {playerNames[currentPlayer]}'s turn
+                {getCurrentPlayerName()}'s turn
                 {isOnlineMode && currentPlayer === myPlayerColor && ' (You)'}
               </div>
             )}
